@@ -14,10 +14,13 @@ private fun CSVParser.removeComments() = filter {
 }
 
 /**
- * A map of filename to localization records
+ * A map of filename to localization records.
  */
 typealias LocalizationFile = Map<String, LocalizationData>
 
+/**
+ * A model for the `localisation` folder.
+ */
 data class Localization(val gameFiles: LocalizationFile, val modFiles: LocalizationFile) {
     companion object : ModelBuilder<Localization> {
         override fun from(file: File): Localization {
@@ -40,10 +43,11 @@ data class Localization(val gameFiles: LocalizationFile, val modFiles: Localizat
             val modLocalization = GameLocation.modFolder.resolve("localisation")
 
             val modCSVFiles = modLocalization.listFiles(filter).orEmpty()
-            val gameCSVFilenames = gameCSVFiles.map { it.nameWithoutExtension }
+            val gameCSVFilenames = gameCSVFiles.map { it.name }
+
             // Don't go over files already visited
             modCSVFiles.filter {
-                it.nameWithoutExtension !in gameCSVFilenames
+                it.name !in gameCSVFilenames
             }.forEach {
                 val data = LocalizationData.from(it)
                 modFiles[it.nameWithoutExtension] = data
@@ -52,12 +56,33 @@ data class Localization(val gameFiles: LocalizationFile, val modFiles: Localizat
             return Localization(gameFiles, modFiles)
         }
     }
+
+    /**
+     * Get the set of all filename to data pairings.
+     */
+    operator fun get(key: String): Set<Pair<String, LocalizationData>> =
+        mutableSetOf<Pair<String, LocalizationData>>().apply {
+            val addOccurrence: (Map.Entry<String, LocalizationData>) -> Unit = { (file, data) ->
+                if (data.records.containsKey(key)) {
+                    this += file to data
+                }
+            }
+
+            modFiles.forEach(addOccurrence)
+            gameFiles.forEach(addOccurrence)
+        }
 }
 
 /**
- * A model for every file in `localisation/`.
+ * A mapping of identifier -> record, or the rows of a localization file.
  */
-data class LocalizationData(val records: Map<String, LocalizationRecord>) {
+typealias LocalizationRows = Map<String, LocalizationRecord>
+
+/**
+ * A model for every .csv file in `localisation/`.
+ */
+// TODO: duplicates should be kept track of.
+data class LocalizationData(val records: LocalizationRows) {
     companion object : ModelBuilder<LocalizationData> {
         /**
          * The csv format with ; as a delimiter.
@@ -69,7 +94,7 @@ data class LocalizationData(val records: Map<String, LocalizationRecord>) {
          * @param file The [File] to get records of.
          * @return All records indexed by their name.
          */
-        private fun parse(file: File): Map<String, LocalizationRecord> {
+        private fun parse(file: File): LocalizationRows {
             require(file.path.endsWith(".csv")) {
                 "File must be a .csv file."
             }
@@ -78,12 +103,12 @@ data class LocalizationData(val records: Map<String, LocalizationRecord>) {
             val parser = CSVParser(file.reader(), format)
 
             parser.use { csv ->
-                csv.removeComments().forEach { record ->
-                    val first = record[0]
+                csv.removeComments().forEach { entry ->
+                    val first = entry[0]
                     var count = 0
                     var containsX = false
 
-                    val rest = record.toList().takeWhile {
+                    val rest = entry.toList().takeWhile {
                         containsX = it.length == 1 && it.toLowerCase() == "x"
                         count++ <= 14 && !containsX
                     }
@@ -96,7 +121,7 @@ data class LocalizationData(val records: Map<String, LocalizationRecord>) {
                         else -> LocalizationState.UNUSED // Usage validation will be when used, will become OK if so.
                     }
 
-                    records[first] = LocalizationRecord(rest.drop(1), state)
+                    records[first] = LocalizationRecord(entry.recordNumber.toInt(), rest.drop(1), state)
                 }
             }
 
@@ -113,10 +138,10 @@ data class LocalizationData(val records: Map<String, LocalizationRecord>) {
     }
 
     /**
-     * Get a localization record with [key] for [language].
+     * Get a localization record with [key] for [language] if [key] is valid.
      */
-    operator fun get(key: String, language: LocalizationLanguage) =
-        records[key]?.getEntryForLanguage(language)
+    operator fun get(key: String, language: LocalizationLanguage = LocalizationLanguage.ENGLISH) =
+        records[key]?.get(language)
 }
 
 /**
@@ -124,10 +149,11 @@ data class LocalizationData(val records: Map<String, LocalizationRecord>) {
  *
  * Every record starts off with an [LocalizationState.UNUSED] state until it is proven otherwise.
  */
-data class LocalizationRecord(val entries: List<String>, var state: LocalizationState) {
-    operator fun get(index: Int) = entries[index]
-
-    fun getEntryForLanguage(language: LocalizationLanguage) = get(language.ordinal)
+data class LocalizationRecord(val index: Int, val entries: List<String>, var state: LocalizationState) {
+    /**
+     * Get a localization entry for the specified [language].
+     */
+    operator fun get(language: LocalizationLanguage) = entries[language.ordinal]
 }
 
 /**
